@@ -1,15 +1,15 @@
 -module(generate_table).
 -export([write_table_module/0, write_inv_table_module/0]).
 
--define(POS_TABLE_SIZE, 326).
--define(NEG_TABLE_SIZE, 342).
+-define(TABLE_SIZE, 326).
+-define(INV_TABLE_SIZE, 342).
 
 -define(POW5_BITCOUNT, 125).
 -define(POW5_INV_BITCOUNT, 125).
 
 write_table_module() ->
 Module = "src/ryu_full_table.erl",
-List = [ values(X) || X <- lists:seq(0, ?POS_TABLE_SIZE - 1)],
+List = [ values(X) || X <- lists:seq(0, ?TABLE_SIZE - 1)],
 file:write_file(Module,
   ["-module(ryu_full_table). \n-export([table/1]). \n",
     [["table(",
@@ -21,7 +21,7 @@ file:write_file(Module,
 
 write_inv_table_module() ->
 Module = "src/ryu_full_inv_table.erl",
-List = [ inv_values(X) || X <- lists:seq(0, ?NEG_TABLE_SIZE - 1)],
+List = [ inv_values(X) || X <- lists:seq(0, ?INV_TABLE_SIZE - 1)],
 file:write_file(Module,
   ["-module(ryu_full_inv_table). \n-export([table/1]). \n",
     [["table(",

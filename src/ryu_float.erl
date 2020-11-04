@@ -12,19 +12,18 @@ fwrite_ryu(0.0) ->
 fwrite_ryu(Float) ->
     {S, M, E} = sign_mantissa_exponent(Float),
     {Mf, Ef} = decode(M, E),
+    Shift = mmshift(M, E),
     E2 = Ef - 2,
     % io:fwrite("~1p~n", [[M, E, Mf, Ef]]),
     {U, V, W} = halfway_compute(Mf, E, M),
-    {_Q, A, B, C, E10, Za, Break_tie, Zc} = step_3(E2, U, V, W),
-    % io:fwrite("~1p~n", [[Q]]),
+    {Q, Vm, Vr, Vp, E10} = step_3(E2, U, V, W),
     Accept = M rem 2 == 0,
-    Accept_smaller = Accept and Za,
-    Accept_larger = Accept or not Zc,
-    io:fwrite("~1p~n", [[Accept, Za]]),
-    {D1, E1} = compute_shortest(A, B, C, Accept_smaller, Accept_larger, Break_tie),
+    {VmIsTrailingZero, VrIsTrailingZero, Vp1} = bounds(V, Q, Vp, Accept, E2, Shift),
+    % io:fwrite("~1p~n", [[Q]]),
+    {D1, E1} = compute_shortest(Vm, Vr, Vp1, VmIsTrailingZero, VrIsTrailingZero, Accept),
     % io:fwrite("~1p~n", [[E1, E10, integer_to_list(D1)]]),
     Ds = insert_decimal(E1 + E10, integer_to_list(D1)),
-    insert_minus(S, Ds).
+    insert_minus(S, Ds). 
 
 -define(BIG_POW, (1 bsl 52)).
 -define(MIN_EXP, (-1074)).
@@ -59,56 +58,50 @@ log2floor(0, N) ->
 log2floor(Int, N) ->
     log2floor(Int bsr 1, 1 + N).
 
-halfway_compute(Mf, E, 0) when E > 1->
+mmshift(0, E) when E > 1 ->
+    0;
+mmshift(_M, _E) ->
+    1.
+
+halfway_compute(Mf, E, 0) when E > 1 ->
     X = 4 * Mf,
     {X - 1, X, X + 2};
 
 halfway_compute(Mf, _E, _M) ->
     X = 4 * Mf,
-    io:fwrite("~1p~n", [[X]]),
+    % io:fwrite("~1p~n", [[X]]),
     {X - 2, X, X + 2}.
 
--define(DOUBLE_POW5_INV_BITCOUNT, 122).
--define(DOUBLE_POW5_BITCOUNT, 121).
+-define(DOUBLE_POW5_INV_BITCOUNT, 125).
+-define(DOUBLE_POW5_BITCOUNT, 125).
 
 step_3(E2, U, V, W) when E2 >= 0 ->
     Q = max(0, ((E2 * 78913) bsr 18) - 1),
+    E10 = Q,
     K = ?DOUBLE_POW5_INV_BITCOUNT + pow5bits(Q) - 1,
     I = -E2 + Q + K,
-    To_table = floor(math:pow(2, K) / math:pow(5, Q)) + 1,
-    A = (U*To_table) bsr I,
-    B = (V*To_table) bsr I,
-    C = (W*To_table) bsr I,
-    E10 = Q,
-    Pow5Qm = case Q of
-                0 -> 1;
-                _ -> floor(math:pow(5, Q - 1))
-            end,
-    Pow5Q = case Q of
-                0 -> 1;
-                _ -> Pow5Qm * 5
-            end,
-    Za = (U rem Pow5Q) == 0 ,
-    Zb = (V rem Pow5Qm) == 0,
-    Zc = (W rem Pow5Q) == 0,
-    {Q, A, B, C, E10, Za, Zb, Zc};
+    % To_table = floor(math:pow(2, K) / math:pow(5, Q)) + 1,
+    From_file = ryu_full_inv_table:table(Q) bsr I,
+    % io:fwrite("~1p~n", [[From_file, To_table]]),
+    {Vm, Vr, Vp} = mulShiftAll(U, V, W, I, From_file),
+    {Q, Vm, Vr, Vp, E10};
 
 step_3(E2, U, V, W) when E2 < 0 ->
     % io:fwrite("~1p~n", [[E2, ((-E2 * 732923) bsr 20)]]),
     Q = max(0, ((-E2 * 732923) bsr 20) - 1),
     I = -E2 - Q,
     K = pow5bits(I) - ?DOUBLE_POW5_BITCOUNT,
-    To_table = floor(math:pow(5, I) / math:pow(2,K)),
+    % To_table = floor(math:pow(5, I) / math:pow(2,K)),
+    From_file = ryu_full_table:table(I),
+    io:fwrite("~1p~n", [[From_file]]),
     J = Q -K,
-    A = (U * To_table) bsr J,
-    B = (V * To_table) bsr J,
-    C = (W * To_table) bsr J,
+    {Vm, Vr, Vp} = mulShiftAll(U, V, W, J, From_file),
     E10 = E2 + Q,
-    Za = (U bsr Q) == 0 ,
-    Zb = (V bsr (Q - 1)) == 0,
-    Zc = (W bsr Q) == 0,
-    io:fwrite("~1p~n", [[A, Za]]),
-    {Q, A, B, C, E10, Za, Zb, Zc}.
+    {Q, Vm, Vr, Vp, E10}.
+
+mulShiftAll(U, V, W, I, To_table) ->
+    Mul = To_table bsr I,
+    {U * Mul, V * Mul, W * Mul}.
 
 pow5bits(E) ->
     ((E * 1217359) bsr 19) + 1.
@@ -127,54 +120,79 @@ multipleOfPowerOf5(Value, Q) ->
     pow5factor(Value) >= Q.
 
 
-compute_shortest(A, B, C, Accept_smaller, Accept_larger, Break_ties) ->
-    Ci = C - cmodifier(Accept_larger),
-    {A1, B1, C1, Digit, All_A, All_B, I} = 
-      loop_1(A, B, Ci, 0, true, true, 0),
-    io:fwrite("~1p~n", [[Accept_smaller, All_A]]),
-    if 
-        Accept_smaller andalso All_A ->
-          loop_2(A1, B1, C1, Digit, All_A, All_B, I, Break_ties);
-        true -> {C1, I}
-    end.
+bounds(Mv, Q, Vp, _Accept, E2, _Shift) when E2 >= 0, Q =< 21, Mv rem 5 =:= 0 ->
+    {false, multipleOfPowerOf5(Mv, Q) , Vp};
+bounds(Mv, Q, Vp, true, E2, Shift) when E2 >= 0, Q =< 21 ->
+    {multipleOfPowerOf5(Mv - 1 - Shift, Q), false , Vp};
+bounds(Mv, Q, Vp, _Accept, E2, _Shift) when E2 >= 0, Q =< 21 ->
+    {false, false , Vp - multipleOfPowerOf5(Mv + 2, Q)};
+bounds(_Mv, Q, Vp, true, E2, Shift) when E2 < 0, Q =< 1 ->
+    {Shift =:= 1, true, Vp};
+bounds(_Mv, Q, Vp, false, E2, _Shift) when E2 < 0, Q =< 1 ->
+    {false, true, Vp - 1};
+bounds(Mv, Q, Vp, _Accept, E2, _Shift) when E2 < 0, Q < 63 ->
+    {false, (Mv band ((1 bsl Q) -1 )) =:= 0, Vp};
+bounds(_Mv, _Q, Vp, _Accept, _E2, _Shift) ->
+    {false, false, Vp}.
 
-cmodifier(true) -> 0;
-cmodifier(_) -> 1.
+compute_shortest(Vm, Vr, Vp, false, false, _Accept) ->
+    {Vm1, Vr1, Removed, RoundUp} =
+        general_case(Vm, Vr, Vp, false, false, 0, 0, false),
+    Output = Vr1 + handle_normal_output_mod(Vr1, Vm1, RoundUp),
+    {Output, Removed};
+compute_shortest(Vm, Vr, Vp, VmIsTrailingZero, VrIsTrailingZero, Accept) ->
+    {Vm1, Vr1, VrTZ, Removed, LastRemovedDigit} = 
+        handle_trailing_zeros(Vm, Vr, Vp, VmIsTrailingZero, VrIsTrailingZero, 0, 0),
+    Output = Vr1 + handle_zero_output_mod(Vr1, Vm1, Accept, VrTZ, LastRemovedDigit),
+    {Output, Removed}.
 
-loop_1(A, B, C, Digiti, All_A_zero, All_B_zero, I)
-    when (A div 10) < (C div 10) ->
-    A_zero = All_A_zero and ((A rem 10) == 0),
-    Ai = A div 10,
-    Ci = C div 10,
-    Bi = B div 10,
-    Digit = B rem 10,
-    B_zero = All_B_zero and (Digiti == 0),
-    loop_1(Ai, Bi, Ci, Digit, A_zero, B_zero, 1 + I);
+handle_trailing_zeros(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit)
+    when (Vp div 10) =< (Vm div 10)->
+    vmIsTrailingZero(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit);
+handle_trailing_zeros(Vm, Vr, Vp, VmIsTrailingZero, VrTZ, Removed, 0) ->
+    VmTZ = VmIsTrailingZero and ((Vm rem 10) =:= 0),
+    handle_trailing_zeros(Vm div 10, Vr div 10, Vp div 10, VmTZ, VrTZ, 1 + Removed, Vr rem 10);
+handle_trailing_zeros(Vm, Vr, Vp, VmIsTrailingZero, _VrTZ, Removed, _LastRemovedDigit) ->
+    VmTZ = VmIsTrailingZero and ((Vm rem 10) =:= 0),
+    handle_trailing_zeros(Vm div 10, Vr div 10, Vp div 10, VmTZ, false, 1 + Removed, Vr rem 10).
 
-loop_1(Ai, Bi, Ci, Digiti, All_A_zero, All_B_zero, I) ->
-    {Ai, Bi, Ci, Digiti, All_A_zero, All_B_zero, I}.
+vmIsTrailingZero(Vm, Vr, Vp, false = VmTZ, VrTZ, Removed, LastRemovedDigit) ->
+    handle_50_dotdot_0(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit);
+vmIsTrailingZero(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit) when (Vm rem 10) /= 0 ->
+    handle_50_dotdot_0(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit);
+vmIsTrailingZero(Vm, Vr, Vp, VmTZ, VrTZ, Removed, 0) ->
+    vmIsTrailingZero(Vm div 10, Vr div 10, Vp div 10, VmTZ, VrTZ, 1 + Removed, Vr rem 10);
+vmIsTrailingZero(Vm, Vr, Vp, VmTZ, _VrTZ, Removed, _LastRemovedDigit) ->
+    vmIsTrailingZero(Vm div 10, Vr div 10, Vp div 10, VmTZ, false, 1 + Removed, Vr rem 10).
 
-loop_2(A, B, C, Digiti, Aa, All_B_zero, I, Bt) when (A rem 10 == 0) ->
-    Ai = A div 10,
-    Ci = C div 10, 
-    Bi = B div 10,
-    Digit = B rem 10,
-    B_zero = All_B_zero and (Digiti == 0),
-    loop_2(Ai, Bi, Ci, Aa, Digit, B_zero, 1 + I, Bt);
+handle_50_dotdot_0(Vm, Vr, _Vp, _VmTZ, true = VrTZ, Removed, 5) when (Vr rem 2) =:= 0 ->
+    {Vm, Vr, VrTZ, Removed, 4};
+handle_50_dotdot_0(Vm, Vr, _Vp, _VmTZ, VrTZ, Removed, LastRemovedDigit) ->
+    {Vm, Vr, VrTZ, Removed, LastRemovedDigit}.
 
-loop_2(A, B, C, Digit, All_A, All_B, I, Break_tie_down) ->
-    return(A, B, C, Digit, All_A, All_B, I, Break_tie_down).
+handle_zero_output_mod(_Vr, _Vm, _Accept, _VmTZ, LastRemovedDigit) 
+    when LastRemovedDigit >= 5 ->
+    1;
+handle_zero_output_mod(Vr, Vm, Accept, VmTZ, _LastRemovedDigit) 
+    when Vr =:= Vm; ((not Accept) or (not VmTZ)) ->
+    1;
+handle_zero_output_mod(_Vr, _Vm, _Accept, _VmTZ, _LastRemovedDigit) ->
+    0.
 
-return(A, B, C, Digiti, All_A_zero, All_B_zero, I, Break_tie_down) ->
-    Is_tie = (Digiti == 5) and All_B_zero,
-    Want_round_down = (Digiti < 5) or (Is_tie and Break_tie_down),
-    Round_down =
-        Want_round_down and ((A /= B) or All_A_zero) or ((B + 1) > C),
-    io:fwrite("~1p~n", [[B, Round_down, Want_round_down, Is_tie]]),
-    {B + bmod(Round_down), I}.
+general_case(Vm, Vr, Vp, _VmIsTrailingZero, _VrIsTrailingZero, Removed, _LastRemovedDigit, RoundUp) 
+    when (Vp div 10) =< (Vm div 10)->
+    {Vm, Vr, Removed, RoundUp};
+general_case(Vm, Vr, Vp, VmIsTrailingZero, VrIsTrailingZero, Removed, LRD, _RU) ->
+    VmD10 = Vm div 10,
+    VrD10 = Vr div 10,
+    VpD10 = Vp div 10,
+    RoundUp = (Vr rem 10 >= 5),
+    general_case(VmD10, VrD10, VpD10, VmIsTrailingZero, VrIsTrailingZero,1 + Removed, LRD, RoundUp).
 
-bmod(true) -> 0;
-bmod(_) -> 1.
+handle_normal_output_mod(Vr, Vm, RoundUp) when (Vm =:= Vr), RoundUp ->
+    1;
+handle_normal_output_mod(_Vr, _Vm, _RoundUp) ->
+    0.
 
 insert_decimal(-1, S) ->
     "0." ++ S;
