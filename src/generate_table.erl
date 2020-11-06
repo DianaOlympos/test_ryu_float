@@ -36,11 +36,11 @@ file:write_file(Module,
 inv_values(X) ->
   Pow = pow5(X),
   Pow5len = log2floor(Pow),
-  J = Pow5len - 1 + ?POW5_INV_BITCOUNT,
+  J = Pow5len + ?POW5_INV_BITCOUNT - 1,
   Inv = ((1 bsl J) div Pow) + 1,
   Pow5high = Inv,
   % Pow5low = Inv band ?MASK,
-  {X,  Pow5high}.
+  {X, Pow5high}.
 
 values(X) ->
   Pow = pow5(X),

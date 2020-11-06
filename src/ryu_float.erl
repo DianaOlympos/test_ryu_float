@@ -29,6 +29,7 @@ fwrite_ryu(Float) ->
 -define(MIN_EXP, (-1074)).
 -define(DOUBLE_BIAS, 1023).
 -define(DOUBLE_MANTISSA_BITS, 52).
+-define(DECODE_CORRECTION, 1075).
 
 % sign_mantissa_exponent(F) ->
 %     case <<F:64/float>> of
@@ -46,9 +47,9 @@ sign_mantissa_exponent(F) ->
 
 decode(Mantissa, 0) ->
     % E = log2floor(Mantissa),
-    {Mantissa, 1 - ?DOUBLE_BIAS - ?DOUBLE_MANTISSA_BITS};
+    {Mantissa, 1 - ?DECODE_CORRECTION};
 decode(Mantissa, Exponent) ->
-    {Mantissa + ?BIG_POW, Exponent - ?DOUBLE_BIAS - ?DOUBLE_MANTISSA_BITS}.
+    {Mantissa + ?BIG_POW, Exponent - ?DECODE_CORRECTION}.
 
 log2floor(Int) when is_integer(Int), Int > 0 ->
     log2floor(Int, 0).
@@ -81,7 +82,7 @@ step_3(E2, U, V, W) when E2 >= 0 ->
     K = ?DOUBLE_POW5_INV_BITCOUNT + pow5bits(Q) - 1,
     I = -E2 + Q + K,
     % To_table = floor(math:pow(2, K) / math:pow(5, Q)) + 1,
-    From_file = ryu_full_inv_table:table(Q) bsr I,
+    From_file = ryu_full_inv_table:table(Q),
     % io:fwrite("~1p~n", [[From_file, To_table]]),
     {Vm, Vr, Vp} = mulShiftAll(U, V, W, I, From_file),
     {Q, Vm, Vr, Vp, E10};
@@ -93,27 +94,27 @@ step_3(E2, U, V, W) when E2 < 0 ->
     K = pow5bits(I) - ?DOUBLE_POW5_BITCOUNT,
     % To_table = floor(math:pow(5, I) / math:pow(2,K)),
     From_file = ryu_full_table:table(I),
-    io:fwrite("~1p~n", [[From_file]]),
+    % io:fwrite("~1p~n", [[From_file]]),
     J = Q -K,
     {Vm, Vr, Vp} = mulShiftAll(U, V, W, J, From_file),
     E10 = E2 + Q,
     {Q, Vm, Vr, Vp, E10}.
 
-mulShiftAll(U, V, W, I, To_table) ->
-    Mul = To_table bsr I,
-    {U * Mul, V * Mul, W * Mul}.
+mulShiftAll(U, V, W, I, Mul) ->
+    A = (U * Mul) bsr I,
+    B = (V * Mul) bsr I,
+    C = (W * Mul) bsr I,
+    {A, B, C }.
 
 pow5bits(E) ->
     ((E * 1217359) bsr 19) + 1.
 
-pow5factor(Val) when (Val rem 5) /= 0 ->
-    1;
 pow5factor(Val) ->
-    pow5factor(Val div 5, 1).
+    pow5factor(Val div 5, 0).
 
 pow5factor(Val, Count) when (Val rem 5) /= 0->
     Count;
-pow5factor(Val, Count) when Val =< 0->
+pow5factor(Val, Count) ->
     pow5factor(Val div 5, Count + 1).
 
 multipleOfPowerOf5(Value, Q) ->
@@ -125,7 +126,7 @@ bounds(Mv, Q, Vp, _Accept, E2, _Shift) when E2 >= 0, Q =< 21, Mv rem 5 =:= 0 ->
 bounds(Mv, Q, Vp, true, E2, Shift) when E2 >= 0, Q =< 21 ->
     {multipleOfPowerOf5(Mv - 1 - Shift, Q), false , Vp};
 bounds(Mv, Q, Vp, _Accept, E2, _Shift) when E2 >= 0, Q =< 21 ->
-    {false, false , Vp - multipleOfPowerOf5(Mv + 2, Q)};
+    {false, false , Vp - vpmodifier(multipleOfPowerOf5(Mv + 2, Q))};
 bounds(_Mv, Q, Vp, true, E2, Shift) when E2 < 0, Q =< 1 ->
     {Shift =:= 1, true, Vp};
 bounds(_Mv, Q, Vp, false, E2, _Shift) when E2 < 0, Q =< 1 ->
@@ -135,9 +136,13 @@ bounds(Mv, Q, Vp, _Accept, E2, _Shift) when E2 < 0, Q < 63 ->
 bounds(_Mv, _Q, Vp, _Accept, _E2, _Shift) ->
     {false, false, Vp}.
 
+vpmodifier(true) -> 1;
+vpmodifier(false) -> 0.
+
 compute_shortest(Vm, Vr, Vp, false, false, _Accept) ->
+    % io:fwrite("~1p~n", [[Vm, Vr, Vp]]),
     {Vm1, Vr1, Removed, RoundUp} =
-        general_case(Vm, Vr, Vp, false, false, 0, 0, false),
+        general_case(Vm, Vr, Vp, 0, false),
     Output = Vr1 + handle_normal_output_mod(Vr1, Vm1, RoundUp),
     {Output, Removed};
 compute_shortest(Vm, Vr, Vp, VmIsTrailingZero, VrIsTrailingZero, Accept) ->
@@ -179,19 +184,31 @@ handle_zero_output_mod(Vr, Vm, Accept, VmTZ, _LastRemovedDigit)
 handle_zero_output_mod(_Vr, _Vm, _Accept, _VmTZ, _LastRemovedDigit) ->
     0.
 
-general_case(Vm, Vr, Vp, _VmIsTrailingZero, _VrIsTrailingZero, Removed, _LastRemovedDigit, RoundUp) 
+general_case(Vm, Vr, Vp, Removed, _RU) when (Vp div 100) > (Vm div 100) ->
+    VmD100 = Vm div 100,
+    VrD100 = Vr div 100,
+    VpD100 = Vp div 100,
+    RoundUp = ((Vr rem 100) >= 50),
+    general_case_10(VmD100, VrD100, VpD100,2 + Removed, RoundUp);
+general_case(Vm, Vr, Vp, Removed, RoundUp) ->
+    general_case_10(Vm, Vr, Vp, Removed, RoundUp).
+
+
+general_case_10(Vm, Vr, Vp, Removed, RoundUp) 
     when (Vp div 10) =< (Vm div 10)->
     {Vm, Vr, Removed, RoundUp};
-general_case(Vm, Vr, Vp, VmIsTrailingZero, VrIsTrailingZero, Removed, LRD, _RU) ->
+general_case_10(Vm, Vr, Vp, Removed, _RU) ->
     VmD10 = Vm div 10,
     VrD10 = Vr div 10,
     VpD10 = Vp div 10,
-    RoundUp = (Vr rem 10 >= 5),
-    general_case(VmD10, VrD10, VpD10, VmIsTrailingZero, VrIsTrailingZero,1 + Removed, LRD, RoundUp).
+    RoundUp = ((Vr rem 10) >= 5),
+    general_case_10(VmD10, VrD10, VpD10,1 + Removed, RoundUp).
 
-handle_normal_output_mod(Vr, Vm, RoundUp) when (Vm =:= Vr), RoundUp ->
+handle_normal_output_mod(Vr, Vm, RoundUp) when (Vm =:= Vr) or RoundUp ->
+    % io:fwrite("~1p~n", [[Vr, Vm, RoundUp]]),
     1;
 handle_normal_output_mod(_Vr, _Vm, _RoundUp) ->
+    % io:fwrite("~1p~n", [[Vr, Vm, RoundUp]]),
     0.
 
 insert_decimal(-1, S) ->
