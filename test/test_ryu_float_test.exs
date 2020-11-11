@@ -5,8 +5,8 @@ defmodule TestRyuFloatTest do
   property "same round-trip as :io_lib_format.fwrite_g/1", numtests: 1_000 do
     forall number <- float() do
       equals(
-        :erlang.list_to_float(:ryu_float.fwrite_ryu(number)),
-        :erlang.list_to_float(:io_lib_format.fwrite_g(number))
+        :erlang.binary_to_float(:erlang.iolist_to_binary(:ryu_float.fwrite_ryu(number))),
+        :erlang.binary_to_float(:erlang.iolist_to_binary(:io_lib_format.fwrite_g(number)))
       )
     end
   end
@@ -14,7 +14,10 @@ defmodule TestRyuFloatTest do
   @tag timeout: 1_000 * 60 * 5
   property "same as :io_lib_format.fwrite_g/1", numtests: 1_000 do
     forall number <- float() do
-      equals(:ryu_float.fwrite_ryu(number), :io_lib_format.fwrite_g(number))
+      equals(
+        :erlang.iolist_to_binary(:ryu_float.fwrite_ryu(number)),
+        :erlang.iolist_to_binary(:io_lib_format.fwrite_g(number))
+      )
     end
   end
 end

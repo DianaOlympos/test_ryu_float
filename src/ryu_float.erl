@@ -13,13 +13,11 @@ fwrite_ryu(Float) ->
     {S, M, E} = sign_mantissa_exponent(Float),
     {Mf, Ef} = decode(M, E),
     Shift = mmshift(M, E),
-    E2 = Ef - 2,
-    % io:fwrite("~1p~n", [[M, E, Mf, Ef]]),
-    {U, V, W} = halfway_compute(Mf, E, M),
-    {Q, Vm, Vr, Vp, E10} = step_3(E2, U, V, W),
+    Mv = 4 * Mf,
+    io:fwrite("~1p~n", [[M, Mf, Mv]]),
+    {Q, Vm, Vr, Vp, E10} = step_3(Ef, Mf, Shift),
     Accept = M rem 2 == 0,
-    {VmIsTrailingZero, VrIsTrailingZero, Vp1} = bounds(V, Q, Vp, Accept, E2, Shift),
-    % io:fwrite("~1p~n", [[Q]]),
+    {VmIsTrailingZero, VrIsTrailingZero, Vp1} = bounds(Mv, Q, Vp, Accept, Ef - 2, Shift),
     {D1, E1} = compute_shortest(Vm, Vr, Vp1, VmIsTrailingZero, VrIsTrailingZero, Accept),
     % io:fwrite("~1p~n", [[E1, E10, integer_to_list(D1)]]),
     Ds = insert_decimal(E1 + E10, integer_to_list(D1)),
@@ -76,34 +74,34 @@ halfway_compute(Mf, _E, _M) ->
 -define(DOUBLE_POW5_INV_BITCOUNT, 125).
 -define(DOUBLE_POW5_BITCOUNT, 125).
 
-step_3(E2, U, V, W) when E2 >= 0 ->
+step_3(E2, Mv, Shift) when E2 >= 0 ->
     Q = max(0, ((E2 * 78913) bsr 18) - 1),
     E10 = Q,
     K = ?DOUBLE_POW5_INV_BITCOUNT + pow5bits(Q) - 1,
     I = -E2 + Q + K,
     % To_table = floor(math:pow(2, K) / math:pow(5, Q)) + 1,
     From_file = ryu_full_inv_table:table(Q),
-    % io:fwrite("~1p~n", [[From_file, To_table]]),
-    {Vm, Vr, Vp} = mulShiftAll(U, V, W, I, From_file),
+    {Vm, Vr, Vp} = mulShiftAll(Mv, Shift, I, From_file),
+    io:fwrite("~1p~n", [[Vm, Vr, Vp]]),
     {Q, Vm, Vr, Vp, E10};
 
-step_3(E2, U, V, W) when E2 < 0 ->
+step_3(E2, Mv, Shift) when E2 < 0 ->
     % io:fwrite("~1p~n", [[E2, ((-E2 * 732923) bsr 20)]]),
     Q = max(0, ((-E2 * 732923) bsr 20) - 1),
     I = -E2 - Q,
     K = pow5bits(I) - ?DOUBLE_POW5_BITCOUNT,
     % To_table = floor(math:pow(5, I) / math:pow(2,K)),
     From_file = ryu_full_table:table(I),
-    % io:fwrite("~1p~n", [[From_file]]),
     J = Q -K,
-    {Vm, Vr, Vp} = mulShiftAll(U, V, W, J, From_file),
+    {Vm, Vr, Vp} = mulShiftAll(Mv, Shift, J, From_file),
+    io:fwrite("~1p~n", [[Vm, Vr, Vp]]),
     E10 = E2 + Q,
     {Q, Vm, Vr, Vp, E10}.
 
-mulShiftAll(U, V, W, I, Mul) ->
-    A = (U * Mul) bsr I,
-    B = (V * Mul) bsr I,
-    C = (W * Mul) bsr I,
+mulShiftAll(Mv, Shift, I, Mul) ->
+    A = ((Mv - 1 - Shift) * Mul) bsr I,
+    B = (Mv * Mul) bsr I,
+    C = ((Mv + 2) * Mul) bsr I,
     {A, B, C }.
 
 pow5bits(E) ->
@@ -212,11 +210,11 @@ handle_normal_output_mod(_Vr, _Vm, _RoundUp) ->
     0.
 
 insert_decimal(-1, S) ->
-    "0." ++ S;
+    ["0.", S];
 insert_decimal(0,S) ->
-    S ++ ".0";
+    [S, ".0"];
 insert_decimal(1,S) ->
-    S ++ "0.0";
+    [S, "0.0"];
 insert_decimal(Place, S) ->
     L = length(S),
     % io:fwrite("~1p~n", [[Place, S, L]]),
@@ -231,31 +229,31 @@ insert_decimal(Place, S) ->
                     if 
                         L > abs(Place) ->
                             {S0, S1} = lists:split(L + Place, S),
-                            S0 ++ "." ++ S1;
+                            [S0, ".", S1];
                         -Place - L =< ExpCost ->
-                            "0." ++ lists:duplicate(-Place - L, $0) ++ S;
+                            ["0.", lists:duplicate(-Place - L, $0), S];
                         true ->
                             insert_exp(ExpL, S)
                     end;
                 true ->
                     if
                         Place - L + 2 =< ExpCost ->
-                            S ++ lists:duplicate(Place - L + 1, $0) ++ ".0";
+                            [S, lists:duplicate(Place - L + 1, $0), ".0"];
                         true ->
                             insert_exp(ExpL, S)
                     end
             end;
         true ->
             {S0, S1} = lists:split(Place, S),
-            S0 ++ "." ++ S1
+            [S0, ".", S1]
     end.
 
 insert_exp(ExpL, [C]) ->
-    [C] ++ ".0e" ++ ExpL;
+    [C, ".0e", ExpL];
 insert_exp(ExpL, [C | S]) ->
-    [C] ++ "." ++ S ++ "e" ++ ExpL.
+    [C, ".", S, "e", ExpL].
 
 insert_minus(0, Digits) ->
     Digits;
 insert_minus(1, Digits) ->
-    [$- | Digits].
+    [$- , Digits].
