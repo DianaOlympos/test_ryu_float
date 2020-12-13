@@ -218,11 +218,11 @@ handle_normal_output_mod(_Vr, _Vm, _RoundUp) ->
     0.
 
 insert_decimal(-1, S) ->
-    ["0.", S];
+    "0." ++ S;
 insert_decimal(0,S) ->
-    [S, ".0"];
+    S ++ ".0";
 insert_decimal(1,S) ->
-    [S, "0.0"];
+    S ++ "0.0";
 insert_decimal(Place, S) ->
     L = length(S),
     % io:fwrite("~1p~n", [[Place, S, L]]),
@@ -236,9 +236,9 @@ insert_decimal(Place, S) ->
             if
                 L > Pos_Place ->
                     {S0, S1} = lists:split(L - Pos_Place, S),
-                    [S0, ".", S1];
+                    S0 ++ "." ++ S1;
                 Pos_Place - L + 2 =< ExpCost ->
-                    ["0.", lists:duplicate(Pos_Place - L, $0), S];
+                    "0." ++ lists:duplicate(Pos_Place - L, $0) ++ S;
                 true ->
                     insert_exp(ExpL, S)
             end;
@@ -250,19 +250,19 @@ insert_decimal(Place, S) ->
             % io:fwrite("~1p~n", [[ExpL, ExpDot, ExpCost]]),
             if
                 Place - L + 2 =< ExpCost ->
-                    [S, lists:duplicate(Place - L + 1, $0), ".0"];
+                    S ++ lists:duplicate(Place - L + 1, $0) ++ ".0";
                 true ->
                     insert_exp(ExpL, S)
             end;
         true ->
             {S0, S1} = lists:split(Place, S),
-            [S0, ".", S1]
+            S0 ++ "." ++ S1
     end.
 
 insert_exp(ExpL, [C]) ->
-    [C, ".0e", ExpL];
+    [C] ++ ".0e" ++ ExpL;
 insert_exp(ExpL, [C | S]) ->
-    [C, ".", S, "e", ExpL].
+    [C] ++ "." ++ S ++ "e" ++ ExpL.
 
 insert_minus(0, Digits) ->
     Digits;
