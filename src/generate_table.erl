@@ -8,28 +8,28 @@
 -define(POW5_INV_BITCOUNT, 125).
 
 write_table_module() ->
-Module = "src/ryu_full_table.erl",
-List = [ values(X) || X <- lists:seq(0, ?TABLE_SIZE - 1)],
-file:write_file(Module,
-  ["-module(ryu_full_table). \n-export([table/1]). \n",
-    [["table(",
-      io_lib:format("~p", [Key]),
-      ") -> ",
-    io_lib:format("~p", [Val]), ";\n"
-     ] || {Key, Val} <- List],
-  "table(_) -> error(function_clause). "]).
+  Module = "src/ryu_full_table.erl",
+  List = [ values(X) || X <- lists:seq(0, ?TABLE_SIZE - 1)],
+  file:write_file(Module,
+    ["-module(ryu_full_table). \n-export([table/1]). \n",
+      [["table(",
+        io_lib:format("~p", [Key]),
+        ") -> ",
+      io_lib:format("~p", [Val]), ";\n"
+      ] || {Key, Val} <- List],
+    "table(_) -> error(function_clause). "]).
 
 write_inv_table_module() ->
-Module = "src/ryu_full_inv_table.erl",
-List = [ inv_values(X) || X <- lists:seq(0, ?INV_TABLE_SIZE - 1)],
-file:write_file(Module,
-  ["-module(ryu_full_inv_table). \n-export([table/1]). \n",
-    [["table(",
-      io_lib:format("~p", [Key]),
-      ") -> ",
-    io_lib:format("~p", [Val]), ";\n"
-     ] || {Key, Val} <- List],
-  "table(_) -> error(function_clause). \n"]).
+  Module = "src/ryu_full_inv_table.erl",
+  List = [ inv_values(X) || X <- lists:seq(0, ?INV_TABLE_SIZE - 1)],
+  file:write_file(Module,
+    ["-module(ryu_full_inv_table). \n-export([table/1]). \n",
+      [["table(",
+        io_lib:format("~p", [Key]),
+        ") -> ",
+      io_lib:format("~p", [Val]), ";\n"
+      ] || {Key, Val} <- List],
+    "table(_) -> error(function_clause). \n"]).
 
 -define(MASK, ((1 bsl 64) - 1)).
 
@@ -38,16 +38,17 @@ inv_values(X) ->
   Pow5len = log2floor(Pow),
   J = Pow5len + ?POW5_INV_BITCOUNT - 1,
   Inv = ((1 bsl J) div Pow) + 1,
-  Pow5high = Inv,
+  % Pow5high = Inv bsr 64,
   % Pow5low = Inv band ?MASK,
-  {X, Pow5high}.
+  {X, Inv}.
 
 values(X) ->
   Pow = pow5(X),
   Pow5len = log2floor(Pow),
-  Pow5high = (Pow bsr (Pow5len - ?POW5_BITCOUNT)),
-  % Pow5low = ((Pow bsr (Pow5len - ?POW5_BITCOUNT)) band ?MASK),
-  {X, Pow5high}.
+  Pow5 = Pow bsr (Pow5len - ?POW5_BITCOUNT),
+  % Pow5high = Pow5 bsr 64,
+  % Pow5low = Pow5 band ?MASK,
+  {X, Pow5}.
 
 pow5(0) ->
   1;

@@ -1,6 +1,6 @@
 -module(ryu_float).
 
--export([fwrite_g/1, fwrite_ryu/1, log2floor/1]).
+-export([fwrite_g/1, fwrite_ryu/1, log2floor/1, sign_mantissa_exponent/1]).
 
 fwrite_g(Float) ->
     io_lib_format:fwrite_g(Float).
@@ -14,10 +14,11 @@ fwrite_ryu(Float) ->
     {Mf, Ef} = decode(M, E),
     Shift = mmshift(M, E),
     Mv = 4 * Mf,
-    io:fwrite("~1p~n", [[M, Mf, Mv]]),
-    {Q, Vm, Vr, Vp, E10} = step_3(Ef, Mf, Shift),
+    % io:fwrite("~1p~n", [[M, Mf, Mv]]),
+    {Q, Vm, Vr, Vp, E10} = step_3(Ef, Mv, Shift),
     Accept = M rem 2 == 0,
     {VmIsTrailingZero, VrIsTrailingZero, Vp1} = bounds(Mv, Q, Vp, Accept, Ef - 2, Shift),
+    % io:fwrite("~1p~n", [[VmIsTrailingZero, VrIsTrailingZero, Vp1, Accept]]),
     {D1, E1} = compute_shortest(Vm, Vr, Vp1, VmIsTrailingZero, VrIsTrailingZero, Accept),
     % io:fwrite("~1p~n", [[E1, E10, integer_to_list(D1)]]),
     Ds = insert_decimal(E1 + E10, integer_to_list(D1)),
@@ -45,9 +46,9 @@ sign_mantissa_exponent(F) ->
 
 decode(Mantissa, 0) ->
     % E = log2floor(Mantissa),
-    {Mantissa, 1 - ?DECODE_CORRECTION};
+    {Mantissa, 1 - ?DECODE_CORRECTION - 2};
 decode(Mantissa, Exponent) ->
-    {Mantissa + ?BIG_POW, Exponent - ?DECODE_CORRECTION}.
+    {Mantissa + ?BIG_POW, Exponent - ?DECODE_CORRECTION -2}.
 
 log2floor(Int) when is_integer(Int), Int > 0 ->
     log2floor(Int, 0).
@@ -62,14 +63,14 @@ mmshift(0, E) when E > 1 ->
 mmshift(_M, _E) ->
     1.
 
-halfway_compute(Mf, E, 0) when E > 1 ->
-    X = 4 * Mf,
-    {X - 1, X, X + 2};
+% halfway_compute(Mf, E, 0) when E > 1 ->
+%     X = 4 * Mf,
+%     {X - 1, X, X + 2};
 
-halfway_compute(Mf, _E, _M) ->
-    X = 4 * Mf,
-    % io:fwrite("~1p~n", [[X]]),
-    {X - 2, X, X + 2}.
+% halfway_compute(Mf, _E, _M) ->
+%     X = 4 * Mf,
+%     % io:fwrite("~1p~n", [[X]]),
+%     {X - 2, X, X + 2}.
 
 -define(DOUBLE_POW5_INV_BITCOUNT, 125).
 -define(DOUBLE_POW5_BITCOUNT, 125).
@@ -82,7 +83,7 @@ step_3(E2, Mv, Shift) when E2 >= 0 ->
     % To_table = floor(math:pow(2, K) / math:pow(5, Q)) + 1,
     From_file = ryu_full_inv_table:table(Q),
     {Vm, Vr, Vp} = mulShiftAll(Mv, Shift, I, From_file),
-    io:fwrite("~1p~n", [[Vm, Vr, Vp]]),
+    % io:fwrite("~1p~n", [[Vm, Vr, Vp]]),
     {Q, Vm, Vr, Vp, E10};
 
 step_3(E2, Mv, Shift) when E2 < 0 ->
@@ -92,17 +93,22 @@ step_3(E2, Mv, Shift) when E2 < 0 ->
     K = pow5bits(I) - ?DOUBLE_POW5_BITCOUNT,
     % To_table = floor(math:pow(5, I) / math:pow(2,K)),
     From_file = ryu_full_table:table(I),
-    J = Q -K,
+    J = Q - K,
     {Vm, Vr, Vp} = mulShiftAll(Mv, Shift, J, From_file),
-    io:fwrite("~1p~n", [[Vm, Vr, Vp]]),
+    % io:fwrite("~1p~n", [[Vm, Vr, Vp]]),
     E10 = E2 + Q,
     {Q, Vm, Vr, Vp, E10}.
 
-mulShiftAll(Mv, Shift, I, Mul) ->
-    A = ((Mv - 1 - Shift) * Mul) bsr I,
-    B = (Mv * Mul) bsr I,
-    C = ((Mv + 2) * Mul) bsr I,
-    {A, B, C }.
+mulShiftAll(Mv, Shift, J, Mul) ->
+    A = mulShift64(Mv - 1 - Shift, Mul, J),
+    B = mulShift64(Mv, Mul, J),
+    C = mulShift64(Mv + 2,Mul, J),
+    % io:fwrite("~1p~n", [[Mv - 1 - Shift, Mv, Mv + 2, Mul, J]]),
+    % io:fwrite("~1p~n", [[A, B, C]]),
+    {A, B, C}.
+
+mulShift64(M, Mul, J) ->
+    (M * Mul) bsr J.
 
 pow5bits(E) ->
     ((E * 1217359) bsr 19) + 1.
@@ -182,14 +188,16 @@ handle_zero_output_mod(Vr, Vm, Accept, VmTZ, _LastRemovedDigit)
 handle_zero_output_mod(_Vr, _Vm, _Accept, _VmTZ, _LastRemovedDigit) ->
     0.
 
-general_case(Vm, Vr, Vp, Removed, _RU) when (Vp div 100) > (Vm div 100) ->
+general_case(Vm, Vr, Vp, Removed, RoundUp) when (Vp div 100) =< (Vm div 100)->
+    general_case_10(Vm, Vr, Vp, Removed, RoundUp);
+general_case(Vm, Vr, Vp, Removed, _RU) ->
     VmD100 = Vm div 100,
     VrD100 = Vr div 100,
     VpD100 = Vp div 100,
     RoundUp = ((Vr rem 100) >= 50),
-    general_case_10(VmD100, VrD100, VpD100,2 + Removed, RoundUp);
-general_case(Vm, Vr, Vp, Removed, RoundUp) ->
-    general_case_10(Vm, Vr, Vp, Removed, RoundUp).
+    % io:fwrite("~1p~n", [[VmD100, VrD100, VpD100, Removed, RoundUp]]),
+    general_case_10(VmD100, VrD100, VpD100, 2 + Removed, RoundUp).
+
 
 
 general_case_10(Vm, Vr, Vp, Removed, RoundUp) 
@@ -200,7 +208,7 @@ general_case_10(Vm, Vr, Vp, Removed, _RU) ->
     VrD10 = Vr div 10,
     VpD10 = Vp div 10,
     RoundUp = ((Vr rem 10) >= 5),
-    general_case_10(VmD10, VrD10, VpD10,1 + Removed, RoundUp).
+    general_case_10(VmD10, VrD10, VpD10, 1 + Removed, RoundUp).
 
 handle_normal_output_mod(Vr, Vm, RoundUp) when (Vm =:= Vr) or RoundUp ->
     % io:fwrite("~1p~n", [[Vr, Vm, RoundUp]]),
@@ -219,29 +227,32 @@ insert_decimal(Place, S) ->
     L = length(S),
     % io:fwrite("~1p~n", [[Place, S, L]]),
     if
-        Place < 0;
+        Place < 0 ->
+            ExpL = integer_to_list(Place - 1 + L),
+            ExpDot = if L =:= 1 -> 2; true -> 1 end,
+            ExpCost = length(ExpL) + 1 + ExpDot,
+            % io:fwrite("~1p~n", [[ExpL, ExpDot, ExpCost]]),
+            Pos_Place = -Place,
+            if
+                L > Pos_Place ->
+                    {S0, S1} = lists:split(L - Pos_Place, S),
+                    [S0, ".", S1];
+                Pos_Place - L + 2 =< ExpCost ->
+                    ["0.", lists:duplicate(Pos_Place - L, $0), S];
+                true ->
+                    insert_exp(ExpL, S)
+            end;
+
         Place >= L ->
             ExpL = integer_to_list(Place - 1),
             ExpDot = if L =:= 1 -> 2; true -> 1 end,
             ExpCost = length(ExpL) + 1 + ExpDot,
-            if 
-                Place < 0 ->
-                    if 
-                        L > abs(Place) ->
-                            {S0, S1} = lists:split(L + Place, S),
-                            [S0, ".", S1];
-                        -Place - L =< ExpCost ->
-                            ["0.", lists:duplicate(-Place - L, $0), S];
-                        true ->
-                            insert_exp(ExpL, S)
-                    end;
+            io:fwrite("~1p~n", [[ExpL, ExpDot, ExpCost]]),
+            if
+                Place - L + 2 =< ExpCost ->
+                    [S, lists:duplicate(Place - L + 1, $0), ".0"];
                 true ->
-                    if
-                        Place - L + 2 =< ExpCost ->
-                            [S, lists:duplicate(Place - L + 1, $0), ".0"];
-                        true ->
-                            insert_exp(ExpL, S)
-                    end
+                    insert_exp(ExpL, S)
             end;
         true ->
             {S0, S1} = lists:split(Place, S),
