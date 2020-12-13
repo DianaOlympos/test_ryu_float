@@ -247,7 +247,7 @@ insert_decimal(Place, S) ->
             ExpL = integer_to_list(Place - 1),
             ExpDot = if L =:= 1 -> 2; true -> 1 end,
             ExpCost = length(ExpL) + 1 + ExpDot,
-            io:fwrite("~1p~n", [[ExpL, ExpDot, ExpCost]]),
+            % io:fwrite("~1p~n", [[ExpL, ExpDot, ExpCost]]),
             if
                 Place - L + 2 =< ExpCost ->
                     [S, lists:duplicate(Place - L + 1, $0), ".0"];
