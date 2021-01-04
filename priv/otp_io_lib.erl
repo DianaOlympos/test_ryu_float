@@ -1,26 +1,29 @@
--module(ryu_float).
+%%  Returns a correctly rounded string that converts to Float when
+%%  read back with list_to_float/1.
+%%
+%%  When abs(Float) < float(1 bsl 53) the shortest such string is
+%%  returned, and otherwise the shortest such string using scientific
+%%  notation is returned. That is, scientific notation is used if and
+%%  only if scientific notation results in a shorter string than
+%%  normal notation when abs(Float) < float(1 bsl 53), and scientific
+%%  notation is used unconditionally if abs(Float) >= float(1 bsl
+%%  53). See comment in insert_decimal/2 for an explanation for why
+%%  float(1 bsl 53) is chosen as cutoff point.
+%%
+%%  The algorithm that is used to find the decimal number that is
+%%  represented by the returned String is described in "Printing
+%%  Floating-Point Numbers Quickly and Accurately" in Proceedings of
+%%  the SIGPLAN '96 Conference on Programming Language Design and
+%%  Implementation.
 
--export([fwrite_g/1, fwrite_ryu/1, sign_mantissa_exponent/1]).
-
+-spec fwrite_g(float()) -> string().
 fwrite_g(Float) ->
-    io_lib_format:fwrite_g(Float).
-
-% TODO handle infinity and NaN
-
--spec fwrite_ryu(float()) -> string().
-fwrite_ryu(Float) ->
     case sign_mantissa_exponent(Float) of
         {0, 0, 0} -> "0.0";
         {1, 0, 0} -> "-0.0";
         {S, M, E} when E < 2047 ->
-            {Place, Digits} = 
-                case is_small_int(M, E) of
-                    {int, M1, E1} ->
-                        compute_shortest_int(M1, E1, M1 rem 10);
-                    not_int ->
-                        fwrite_g_1(M, E)
-                end,
-            DigitList = insert_decimal(Place, Digits, Float),
+            {Place, Digits} = fwrite_g_1(M, E),
+            DigitList = insert_decimal(Place, Digits),
             insert_minus(S, DigitList)
     end.
 
@@ -30,30 +33,6 @@ fwrite_ryu(Float) ->
 sign_mantissa_exponent(F) ->
     <<S:1, BE:11, M:52>> = <<F:64/float>>,
     {S, M , BE}.
-
-is_small_int(M, E) ->
-    M2 = ?BIG_POW bor M,
-    E2 = E - ?DECODE_CORRECTION,
-    case E2 > 0 orelse E2 < -52 of
-        true ->
-            not_int;
-        _ -> 
-            Mask = (1 bsl -E2) - 1,
-            Fraction = M2 band Mask,
-            case Fraction of
-                0 ->
-                    {int, M2 bsr -E2, 0};
-                _ ->
-                    not_int
-            end
-    end.
-
-compute_shortest_int(M, E, 0) ->
-    Q = M div 10,
-    R1 = M rem 10,
-    compute_shortest_int(Q, E + 1, R1);
-compute_shortest_int(M, E, _R) ->
-    {E, integer_to_list(M)}.
 
 fwrite_g_1(M, E) ->
     {Mf, Ef} = decode(M, E),
@@ -75,10 +54,13 @@ mmshift(0, E) when E > 1 ->
 mmshift(_M, _E) ->
     1.
 
+-define(DOUBLE_POW5_INV_BITCOUNT, 125).
+-define(DOUBLE_POW5_BITCOUNT, 125).
+
 convert_to_decimal(E2, Mv, Shift) when E2 >= 0 ->
     Q = max(0, ((E2 * 78913) bsr 18) - 1),
-    Mul = io_lib_format_ryu_table:inv_value(Q),
-    K = io_lib_format_ryu_table:pow5_inv_bitcount() + pow5bits(Q) - 1,
+    Mul = io_lib_ryu_table:inv_table(Q),
+    K = io_lib_ryu_table:pow5_inv_bitcount() + pow5bits(Q) - 1,
     I = -E2 + Q + K,
     {Vm, Vr, Vp} = mulShiftAll(Mv, Shift, I, Mul),
     {Q, Vm, Vr, Vp, Q};
@@ -86,8 +68,8 @@ convert_to_decimal(E2, Mv, Shift) when E2 >= 0 ->
 convert_to_decimal(E2, Mv, Shift) when E2 < 0 ->
     Q = max(0, ((-E2 * 732923) bsr 20) - 1),
     I = -E2 - Q,
-    K = pow5bits(I) - io_lib_format_ryu_table:pow5_bitcount(),
-    From_file = io_lib_format_ryu_table:value(I),
+    K = pow5bits(I) - io_lib_ryu_table:pow5_bitcount(),
+    From_file = io_lib_ryu_table:table(I),
     J = Q - K,
     {Vm, Vr, Vp} = mulShiftAll(Mv, Shift, J, From_file),
     E10 = E2 + Q,
@@ -174,10 +156,12 @@ handle_normal_output_mod(_Vr, _Vm, _RoundUp) ->
 handle_trailing_zeros(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit)
     when (Vp div 10) =< (Vm div 10)->
     vmIsTrailingZero(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit);
-handle_trailing_zeros(Vm, Vr, Vp, VmIsTrailingZero, VrIsTrailingZero, Removed, LastRemovedDigit) ->
+handle_trailing_zeros(Vm, Vr, Vp, VmIsTrailingZero, VrTZ, Removed, 0) ->
     VmTZ = VmIsTrailingZero and ((Vm rem 10) =:= 0),
-    VrTZ = VrIsTrailingZero and (LastRemovedDigit =:= 0), 
-    handle_trailing_zeros(Vm div 10, Vr div 10, Vp div 10, VmTZ, VrTZ, 1 + Removed, Vr rem 10).
+    handle_trailing_zeros(Vm div 10, Vr div 10, Vp div 10, VmTZ, VrTZ, 1 + Removed, Vr rem 10);
+handle_trailing_zeros(Vm, Vr, Vp, VmIsTrailingZero, _VrTZ, Removed, _LastRemovedDigit) ->
+    VmTZ = VmIsTrailingZero and ((Vm rem 10) =:= 0),
+    handle_trailing_zeros(Vm div 10, Vr div 10, Vp div 10, VmTZ, false, 1 + Removed, Vr rem 10).
 
 vmIsTrailingZero(Vm, Vr, Vp, false = VmTZ, VrTZ, Removed, LastRemovedDigit) ->
     handle_50_dotdot_0(Vm, Vr, Vp, VmTZ, VrTZ, Removed, LastRemovedDigit);
@@ -193,45 +177,79 @@ handle_50_dotdot_0(Vm, Vr, _Vp, _VmTZ, VrTZ, Removed, LastRemovedDigit) ->
 
 handle_zero_output_mod(_Vr, _Vm, _Accept, _VmTZ, LastRemovedDigit) when LastRemovedDigit >= 5 ->
     1;
-handle_zero_output_mod(Vr, Vm, Accept, VmTZ, _LastRemovedDigit) when Vr =:= Vm, ((not Accept) or (not VmTZ)) ->
+handle_zero_output_mod(Vr, Vm, Accept, VmTZ, _LastRemovedDigit) when Vr =:= Vm; ((not Accept) or (not VmTZ)) ->
     1;
 handle_zero_output_mod(_Vr, _Vm, _Accept, _VmTZ, _LastRemovedDigit) ->
     0.
 
-insert_decimal(Place, S, Float) ->
+% insert_decimal(0, S, _) ->
+%     "0." ++ S;
+% insert_decimal(Place, S, Float) ->
+%     L = length(S),
+%     if
+%         Place < 0;
+%         Place >= L ->
+%             ExpL = integer_to_list(Place - 1),
+%             ExpDot = if L =:= 1 -> 2; true -> 1 end,
+%             ExpCost = length(ExpL) + 1 + ExpDot,
+%             if 
+%                 Place < 0 ->
+%                     if 
+%                         2 - Place =< ExpCost ->
+%                             "0." ++ lists:duplicate(-Place, $0) ++ S;
+%                         true ->
+%                             insert_exp(ExpL, S)
+%                     end;
+%                 true ->
+%                     if
+%                         %% All integers in the range [-2^53, 2^53] can
+%                         %% be stored without loss of precision in an
+%                         %% IEEE 754 64-bit double but 2^53+1 cannot be
+%                         %% stored in an IEEE 754 64-bit double without
+%                         %% loss of precision (float((1 bsl 53)+1) =:=
+%                         %% float(1 bsl 53)). It thus makes sense to
+%                         %% show floats that are >= 2^53 or <= -2^53 in
+%                         %% scientific notation to indicate that the
+%                         %% number is so large that there could be loss
+%                         %% in precion when adding or subtracting 1.
+%                         %%
+%                         %% https://stackoverflow.com/questions/1848700/biggest-integer-that-can-be-stored-in-a-double?answertab=votes#tab-top
+%                         Place - L + 2 =< ExpCost andalso abs(Float) < float(1 bsl 53) ->
+%                             S ++ lists:duplicate(Place - L, $0) ++ ".0";
+%                         true ->
+%                             insert_exp(ExpL, S)
+%                     end
+%             end;
+%         true ->
+%             {S0, S1} = lists:split(Place, S),
+%             S0 ++ "." ++ S1
+%     end.
+
+insert_decimal(Place, S) ->
+    L = length(S),
+    Exp = Place + L - 1,
+    ExpL = integer_to_list(Exp),
+    ExpCost = length(ExpL) + 2,
+    % io:fwrite("~1p~n", [[Place, S, L, ExpL, ExpCost]]),
     if
         Place < 0 ->
-            L = length(S),
-            Exp = Place + L - 1,
-            ExpL = integer_to_list(Exp),
-            ExpCost = length(ExpL) + 2,
             if
                 Exp >= 0 ->
                     {S0, S1} = lists:split(L + Place, S),
                     S0 ++ "." ++ S1;
                 2 - Place - L =< ExpCost ->
-                    %% All integers in the range [-2^53, 2^53] can
-                    %% be stored without loss of precision in an
-                    %% IEEE 754 64-bit double but 2^53+1 cannot be
-                    %% stored in an IEEE 754 64-bit double without
-                    %% loss of precision (float((1 bsl 53)+1) =:=
-                    %% float(1 bsl 53)). It thus makes sense to
-                    %% show floats that are >= 2^53 or <= -2^53 in
-                    %% scientific notation to indicate that the
-                    %% number is so large that there could be loss
-                    %% in precion when adding or subtracting 1.
-                    %%
-                    %% https://stackoverflow.com/questions/1848700/biggest-integer-that-can-be-stored-in-a-double?answertab=votes#tab-top
                     "0." ++ lists:duplicate(-Place - L, $0) ++ S;
                 true ->
                     insert_exp(ExpL, S)
             end;
-        Place =:= 0 andalso abs(Float) < float(1 bsl 53) ->
-            S ++ ".0";
+        Place =:= 0 ->
+            if
+                L + 1 =< ExpCost ->
+                    S ++ ".0";
+                true ->
+                    insert_exp(ExpL, S)
+            end;
         true ->
-            L = length(S),
-            Exp = Place + L - 1,
-            ExpL = integer_to_list(Exp),
             insert_exp(ExpL, S)
     end.
 
@@ -243,4 +261,5 @@ insert_exp(ExpL, [C | S]) ->
 insert_minus(0, Digits) ->
     Digits;
 insert_minus(1, Digits) ->
-    [$-] ++ Digits.
+    [$- , Digits].
+
